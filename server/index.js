@@ -7,6 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { EXERCISES } from './planSchema.js';
 import { generatePlan } from './llm.js';
 import { sendPlanEmail } from './email.js';
+import { dbEnabled, initDb } from './db.js';
+import {
+  sendLoginCode, verifyLoginCode, resolveUser, logout,
+  guestTryUse, savePlan, listPlans, getPlan,
+} from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -21,6 +26,7 @@ const PORT = Number(argVal('port', process.env.PORT || 3000));
 const HOST = argVal('host', process.env.HOST || '0.0.0.0');
 
 const app = express();
+app.set('trust proxy', 1); // 在 nginx 后面，取真实访客 IP
 app.use(express.json({ limit: '256kb' }));
 
 // 简单限流：每 IP 每分钟最多 10 次生成请求
@@ -35,16 +41,74 @@ app.use('/api/plan', (req, res, next) => {
   next();
 });
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, llm: !!process.env.LLM_API_KEY, resend: !!process.env.RESEND_API_KEY }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, llm: !!process.env.LLM_API_KEY, resend: !!process.env.RESEND_API_KEY, db: dbEnabled() }));
 
 app.get('/api/exercises', (_req, res) => res.json(EXERCISES));
+
+// ---------- 登录（邮箱验证码，免密码） ----------
+app.post('/api/auth/code', async (req, res) => {
+  try {
+    if (!dbEnabled()) return res.status(503).json({ error: '服务器未配置数据库，登录暂不可用' });
+    const email = String(req.body?.email || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: '邮箱格式不正确' });
+    await sendLoginCode(email);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) });
+  }
+});
+
+app.post('/api/auth/verify', async (req, res) => {
+  try {
+    if (!dbEnabled()) return res.status(503).json({ error: '服务器未配置数据库，登录暂不可用' });
+    const email = String(req.body?.email || '').trim();
+    const code = String(req.body?.code || '').trim();
+    const { token, user } = await verifyLoginCode(email, code);
+    res.json({ token, user });
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) });
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  const m = (req.headers.authorization || '').match(/^Bearer (\S+)$/);
+  if (m && dbEnabled()) await logout(m[1]).catch(() => {});
+  res.json({ ok: true });
+});
+
+// ---------- 我的 ----------
+app.get('/api/me', async (req, res) => {
+  if (!dbEnabled()) return res.json({ user: null });
+  const user = await resolveUser(req).catch(() => null);
+  res.json({ user });
+});
+
+app.get('/api/me/plans', async (req, res) => {
+  const user = dbEnabled() ? await resolveUser(req).catch(() => null) : null;
+  if (!user) return res.status(401).json({ error: '请先登录' });
+  res.json({ plans: await listPlans(user.id) });
+});
+
+app.get('/api/me/plans/:id', async (req, res) => {
+  const user = dbEnabled() ? await resolveUser(req).catch(() => null) : null;
+  if (!user) return res.status(401).json({ error: '请先登录' });
+  const row = await getPlan(user.id, Number(req.params.id));
+  if (!row) return res.status(404).json({ error: '计划不存在' });
+  res.json({ plan: row.plan, source: row.source });
+});
 
 app.post('/api/plan', async (req, res) => {
   try {
     const profile = req.body || {};
     if (!profile.goal) return res.status(400).json({ error: '缺少训练目标' });
+    const user = dbEnabled() ? await resolveUser(req).catch(() => null) : null;
+    if (!user && dbEnabled()) {
+      const ok = await guestTryUse(req.ip);
+      if (!ok) return res.status(403).json({ error: '游客体验次数已用完，登录后可无限生成并保存计划', needLogin: true });
+    }
     const result = await generatePlan(profile);
-    res.json(result);
+    if (user) await savePlan(user.id, profile, result.plan, result.source).catch((e) => console.error('[savePlan]', e));
+    res.json({ ...result, saved: !!user });
   } catch (err) {
     console.error('[plan]', err);
     res.status(500).json({ error: '计划生成失败，请稍后再试' });
@@ -67,9 +131,19 @@ app.post('/api/plan/stream', async (req, res) => {
       send('error', { error: '缺少训练目标' });
       return;
     }
+    const user = dbEnabled() ? await resolveUser(req).catch(() => null) : null;
+    if (!user && dbEnabled()) {
+      const ok = await guestTryUse(req.ip);
+      if (!ok) {
+        send('error', { error: '游客体验次数已用完，登录后可无限生成并保存计划', needLogin: true });
+        return;
+      }
+      send('stage', { text: '游客模式：本次计划不会被保存，登录可保存历史' });
+    }
     send('stage', { text: '档案已收到，正在筛选适合你器械的动作库…' });
     const result = await generatePlan(profile, (text) => send('stage', { text }));
-    send('result', result);
+    if (user) await savePlan(user.id, profile, result.plan, result.source).catch((e) => console.error('[savePlan]', e));
+    send('result', { ...result, saved: !!user });
   } catch (err) {
     console.error('[plan/stream]', err);
     send('error', { error: '计划生成失败，请稍后再试' });
@@ -114,4 +188,5 @@ if (isProd) {
 
 app.listen(PORT, HOST, () => {
   console.log(`[ai-coach] ${isProd ? 'prod' : 'dev'} listening on http://${HOST}:${PORT}`);
+  initDb().catch((e) => console.error('[db] 初始化失败：', e.message));
 });

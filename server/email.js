@@ -62,6 +62,25 @@ export function planToHtml(plan, publicUrl) {
   </div>`;
 }
 
+// 登录验证码邮件（纯文字即可，避免图片拖慢送达）
+export async function sendCodeEmail(to, code, ttlMin) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) throw new Error('未配置 RESEND_API_KEY');
+  const resend = new Resend(apiKey);
+  const from = process.env.RESEND_FROM || 'AI 私教 <onboarding@resend.dev>';
+  const { error } = await resend.emails.send({
+    from,
+    to: [to],
+    subject: `${code} 是你的登录验证码`,
+    html: `<div style="max-width:480px;margin:0 auto;padding:32px 24px;font-family:system-ui;background:#16181c;color:#e9ecef;border-radius:12px">
+      <h2 style="margin:0 0 16px">🏋️ AI 私教登录验证码</h2>
+      <p style="font-size:32px;letter-spacing:8px;font-weight:700;color:#60a5fa;margin:16px 0">${code}</p>
+      <p style="color:#adb5bd;font-size:14px">${ttlMin} 分钟内有效。如果这不是你的操作，忽略本邮件即可。</p>
+    </div>`,
+  });
+  if (error) throw new Error(error.message || JSON.stringify(error));
+}
+
 export async function sendPlanEmail(to, plan) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) throw new Error('未配置 RESEND_API_KEY');

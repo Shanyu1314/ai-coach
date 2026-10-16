@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Toaster, toast } from 'sonner'
-import { Dumbbell, Loader2, Mail, RotateCcw, Sparkles } from 'lucide-react'
+import { Dumbbell, History, Loader2, LogIn, LogOut, Mail, RotateCcw, Sparkles } from 'lucide-react'
 import { MotionScrub } from '@/components/MotionScrub'
 
 type PlanExercise = { slug?: string; custom?: boolean; name: string; muscle?: string; sets: string; rest: string; cue: string }
@@ -44,6 +44,93 @@ export default function App() {
   const [sending, setSending] = useState(false)
   const [module, setModule] = useState<'boji' | 'dashui' | 'dashui2' | 'huangmao'>('boji')
 
+  // ---------- 登录态 ----------
+  const [token, setToken] = useState(() => localStorage.getItem('ai_coach_token') || '')
+  const [user, setUser] = useState<{ id: number; email: string; nickname: string } | null>(null)
+  const [authOpen, setAuthOpen] = useState(false)
+  const [authEmail, setAuthEmail] = useState('')
+  const [authCode, setAuthCode] = useState('')
+  const [codeSent, setCodeSent] = useState(false)
+  const [countdown, setCountdown] = useState(0)
+  const [authBusy, setAuthBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [myPlans, setMyPlans] = useState<{ id: number; title: string; source: string; created_at: string }[]>([])
+  const [historyOpen, setHistoryOpen] = useState(false)
+
+  const authHeaders = () => (token ? { Authorization: `Bearer ${token}` } : {}) as Record<string, string>
+
+  useEffect(() => {
+    if (!token) return
+    fetch('/api/me', { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((d) => { if (d.user) setUser(d.user); else { setToken(''); localStorage.removeItem('ai_coach_token') } })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (countdown <= 0) return
+    const t = setTimeout(() => setCountdown((c) => c - 1), 1000)
+    return () => clearTimeout(t)
+  }, [countdown])
+
+  async function sendCode() {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(authEmail)) { toast.error('邮箱格式不正确'); return }
+    setAuthBusy(true)
+    try {
+      const r = await fetch('/api/auth/code', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: authEmail }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || '发送失败')
+      setCodeSent(true)
+      setCountdown(60)
+      toast.success('验证码已发送，请查收（可能在垃圾邮件里）')
+    } catch (e) { toast.error(String((e as Error).message || e)) } finally { setAuthBusy(false) }
+  }
+
+  async function login() {
+    setAuthBusy(true)
+    try {
+      const r = await fetch('/api/auth/verify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, code: authCode }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || '登录失败')
+      setToken(d.token)
+      localStorage.setItem('ai_coach_token', d.token)
+      setUser(d.user)
+      setAuthOpen(false)
+      toast.success(`登录成功，欢迎回来 ${d.user.nickname || d.user.email}`)
+    } catch (e) { toast.error(String((e as Error).message || e)) } finally { setAuthBusy(false) }
+  }
+
+  async function doLogout() {
+    await fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() }).catch(() => {})
+    setToken(''); setUser(null); localStorage.removeItem('ai_coach_token')
+    toast.success('已退出登录')
+  }
+
+  async function openHistory() {
+    const r = await fetch('/api/me/plans', { headers: authHeaders() })
+    const d = await r.json()
+    if (!r.ok) { toast.error(d.error || '加载失败'); return }
+    setMyPlans(d.plans)
+    setHistoryOpen(true)
+  }
+
+  async function loadPlan(id: number) {
+    const r = await fetch(`/api/me/plans/${id}`, { headers: authHeaders() })
+    const d = await r.json()
+    if (!r.ok) { toast.error(d.error || '加载失败'); return }
+    setPlan(d.plan)
+    setSource(d.source)
+    setSaved(true)
+    setHistoryOpen(false)
+    setStep('plan')
+  }
+
   // 平台四模块 = 四个梗：薄肌=训练、大水=饮水、大睡=睡眠、黄毛=心态
   const MODULES = [
     { key: 'boji', label: '薄肌', sub: '训练' },
@@ -66,7 +153,7 @@ export default function App() {
     try {
       const resp = await fetch('/api/plan/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           ...profile,
           age: Number(profile.age) || undefined,
@@ -79,14 +166,16 @@ export default function App() {
       })
       if (!resp.ok || !resp.body) {
         const data = await resp.json().catch(() => ({}))
+        if (data.needLogin) { setAuthOpen(true) }
         throw new Error(data.error || '生成失败')
       }
       // 逐行解析 SSE 流：stage 事件更新进度，result 事件给出最终计划
       const reader = resp.body.getReader()
       const decoder = new TextDecoder()
       let buf = ''
-      let final: { plan: Plan; source: string } | null = null
+      let final: { plan: Plan; source: string; saved?: boolean } | null = null
       let streamError = ''
+      let streamNeedLogin = false
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
@@ -100,13 +189,17 @@ export default function App() {
           const payload = JSON.parse(dataLine)
           if (event === 'stage') setProgress((p) => [...p, payload.text])
           else if (event === 'result') final = payload
-          else if (event === 'error') streamError = payload.error
+          else if (event === 'error') { streamError = payload.error; streamNeedLogin = !!payload.needLogin }
         }
       }
-      if (streamError) throw new Error(streamError)
+      if (streamError) {
+        if (streamNeedLogin) setAuthOpen(true)
+        throw new Error(streamError)
+      }
       if (!final) throw new Error('生成中断，请重试')
       setPlan(final.plan)
       setSource(final.source)
+      setSaved(!!final.saved)
       setStep('plan')
     } catch (err) {
       toast.error(String(err))
@@ -138,11 +231,32 @@ export default function App() {
       <Toaster theme="dark" position="top-center" />
       <div className="mx-auto max-w-3xl px-4 py-10">
         <header className="mb-8 text-center">
+          {/* 右上角登录区 */}
+          <div className="mb-3 flex justify-end">
+            {user ? (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="rounded-full bg-green-500/10 border border-green-500/30 px-3 py-1 text-green-400 max-w-40 truncate">
+                  {user.nickname || user.email}
+                </span>
+                <Button variant="outline" size="sm" className="border-zinc-700" onClick={openHistory}>
+                  <History className="mr-1 h-3.5 w-3.5" /> 我的计划
+                </Button>
+                <Button variant="ghost" size="sm" className="text-zinc-500" onClick={doLogout}>
+                  <LogOut className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <Button variant="outline" size="sm" className="border-zinc-700" onClick={() => setAuthOpen(true)}>
+                <LogIn className="mr-1 h-3.5 w-3.5" /> 邮箱登录
+              </Button>
+            )}
+          </div>
           <div className="mb-2 flex items-center justify-center gap-2">
             <Dumbbell className="h-7 w-7 text-blue-400" />
             <h1 className="text-2xl font-bold">AI 私教计划生成器</h1>
           </div>
           <p className="text-sm text-zinc-500">填 30 秒问卷，大模型为你定制训练计划，自动配上 302 个标准动作动图</p>
+          {!user && <p className="mt-1 text-xs text-zinc-600">游客可免费体验 1 次 · 登录后无限生成并保存计划</p>}
         </header>
 
         {step === 'form' && (
@@ -242,6 +356,16 @@ export default function App() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* 游客提示：本次不保存 */}
+            {!user && !saved && (
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-300">
+                <span>游客模式：本次计划不会被保存，刷新后消失</span>
+                <Button size="sm" variant="outline" className="border-yellow-500/40 text-yellow-300 shrink-0" onClick={() => setAuthOpen(true)}>
+                  登录保存
+                </Button>
+              </div>
+            )}
 
             {/* 四模块导航 */}
             <div className="grid grid-cols-4 gap-1 rounded-xl bg-zinc-900 p-1">
@@ -376,6 +500,75 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* 登录弹窗：邮箱 + 验证码，免密码 */}
+      {authOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={() => setAuthOpen(false)}>
+          <Card className="w-full max-w-sm border-zinc-700 bg-[#16181c]" onClick={(e) => e.stopPropagation()}>
+            <CardHeader><CardTitle className="text-base">邮箱登录</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label>邮箱</Label>
+                <Input className="mt-1 bg-zinc-900 border-zinc-700" type="email" value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)} placeholder="you@example.com" disabled={codeSent} />
+              </div>
+              {codeSent && (
+                <div>
+                  <Label>验证码</Label>
+                  <Input className="mt-1 bg-zinc-900 border-zinc-700 tracking-widest" value={authCode}
+                    onChange={(e) => setAuthCode(e.target.value)} placeholder="6 位数字" maxLength={6} />
+                </div>
+              )}
+              <div className="flex gap-2">
+                {!codeSent ? (
+                  <Button className="flex-1 bg-blue-600 hover:bg-blue-500" disabled={authBusy} onClick={sendCode}>
+                    {authBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />} 发送验证码
+                  </Button>
+                ) : (
+                  <>
+                    <Button className="flex-1 bg-blue-600 hover:bg-blue-500" disabled={authBusy || authCode.length !== 6} onClick={login}>
+                      {authBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogIn className="mr-2 h-4 w-4" />} 登录
+                    </Button>
+                    <Button variant="outline" className="border-zinc-700" disabled={countdown > 0} onClick={sendCode}>
+                      {countdown > 0 ? `${countdown}s` : '重发'}
+                    </Button>
+                  </>
+                )}
+              </div>
+              <p className="text-xs text-zinc-600">免密码登录：验证码 10 分钟内有效，未注册的邮箱会自动创建账号</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* 历史计划弹窗 */}
+      {historyOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={() => setHistoryOpen(false)}>
+          <Card className="w-full max-w-md border-zinc-700 bg-[#16181c]" onClick={(e) => e.stopPropagation()}>
+            <CardHeader><CardTitle className="text-base">我的计划</CardTitle></CardHeader>
+            <CardContent>
+              {myPlans.length === 0 ? (
+                <p className="text-sm text-zinc-500">还没有保存的计划，去生成一个吧</p>
+              ) : (
+                <div className="max-h-80 space-y-2 overflow-y-auto">
+                  {myPlans.map((p) => (
+                    <button key={p.id} onClick={() => loadPlan(p.id)}
+                      className="flex w-full items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-left hover:border-zinc-600">
+                      <div>
+                        <div className="text-sm font-medium">{p.title}</div>
+                        <div className="text-xs text-zinc-500">{new Date(p.created_at).toLocaleString('zh-CN')}</div>
+                      </div>
+                      <Badge variant="outline" className={p.source === 'llm' ? 'border-green-500/40 text-green-400' : 'border-yellow-500/40 text-yellow-400'}>
+                        {p.source === 'llm' ? 'AI' : '规则'}
+                      </Badge>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   )
 }
