@@ -74,6 +74,13 @@ export async function sendPlanEmail(to, plan) {
     subject: `🏋️ ${plan.title}`,
     html: planToHtml(plan, publicUrl),
   });
-  if (error) throw new Error(error.message || JSON.stringify(error));
+  if (error) {
+    const msg = error.message || JSON.stringify(error);
+    // Resend 沙箱限制：只能发给注册邮箱，转成用户能看懂的中文提示
+    if (/only send testing emails/i.test(msg)) {
+      throw new Error('邮件服务还在测试期，暂时只能发到站长自己的邮箱。我们正在配置域名，很快就能给所有人发信了');
+    }
+    throw new Error(msg);
+  }
   return data;
 }
