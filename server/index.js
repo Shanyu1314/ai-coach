@@ -26,17 +26,20 @@ const PORT = Number(argVal('port', process.env.PORT || 3000));
 const HOST = argVal('host', process.env.HOST || '0.0.0.0');
 
 const app = express();
-app.set('trust proxy', 1); // 在 nginx 后面，取真实访客 IP
+app.set('trust proxy', 2); // 访客 → Cloudflare → nginx → node，取真实访客 IP
 app.use(express.json({ limit: '256kb' }));
+
+// 真实访客 IP：优先 Cloudflare 透传头，其次代理链解析
+const clientIp = (req) => String(req.headers['cf-connecting-ip'] || req.ip || '');
 
 // 简单限流：每 IP 每分钟最多 10 次生成请求
 const buckets = new Map();
 app.use('/api/plan', (req, res, next) => {
   const now = Date.now();
-  const b = buckets.get(req.ip) || { count: 0, reset: now + 60_000 };
+  const b = buckets.get(clientIp(req)) || { count: 0, reset: now + 60_000 };
   if (now > b.reset) { b.count = 0; b.reset = now + 60_000; }
   b.count += 1;
-  buckets.set(req.ip, b);
+  buckets.set(clientIp(req), b);
   if (b.count > 10) return res.status(429).json({ error: '请求太频繁，请一分钟后再试' });
   next();
 });
@@ -115,7 +118,7 @@ app.post('/api/plan', async (req, res) => {
     if (!profile.goal) return res.status(400).json({ error: '缺少训练目标' });
     const user = dbEnabled() ? await resolveUser(req).catch(() => null) : null;
     if (!user && dbEnabled()) {
-      const ok = await guestTryUse(req.ip);
+      const ok = await guestTryUse(clientIp(req));
       if (!ok) return res.status(403).json({ error: '游客体验次数已用完，登录后可无限生成并保存计划', needLogin: true });
     }
     const result = await generatePlan(profile);
@@ -145,7 +148,7 @@ app.post('/api/plan/stream', async (req, res) => {
     }
     const user = dbEnabled() ? await resolveUser(req).catch(() => null) : null;
     if (!user && dbEnabled()) {
-      const ok = await guestTryUse(req.ip);
+      const ok = await guestTryUse(clientIp(req));
       if (!ok) {
         send('error', { error: '游客体验次数已用完，登录后可无限生成并保存计划', needLogin: true });
         return;
