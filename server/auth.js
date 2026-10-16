@@ -24,7 +24,22 @@ export async function sendLoginCode(email) {
   await sendCodeEmail(email, code, CODE_TTL_MIN);
 }
 
-export async function verifyLoginCode(email, code) {
+// 密码散列：scrypt（Node 内置，无需额外依赖）
+export function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+export function checkPassword(password, stored) {
+  const [salt, hash] = String(stored || '').split(':');
+  if (!salt || !hash) return false;
+  const test = crypto.scryptSync(password, salt, 64).toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(test, 'hex'));
+}
+
+// 注册专用：校验验证码并焚毁，成功返回 true（不建用户，由注册接口建）
+async function consumeCode(email, code) {
   const pool = getPool();
   const [rows] = await pool.query(
     'SELECT id FROM login_codes WHERE email = ? AND code = ? AND used = 0 AND expires_at > NOW() ORDER BY id DESC LIMIT 1',
@@ -32,23 +47,42 @@ export async function verifyLoginCode(email, code) {
   );
   if (rows.length === 0) throw new Error('验证码错误或已过期');
   await pool.query('UPDATE login_codes SET used = 1 WHERE id = ?', [rows[0].id]);
+}
 
-  // 找或建用户
-  const [users] = await pool.query('SELECT id, email, nickname FROM users WHERE email = ?', [email]);
-  let user = users[0];
-  if (!user) {
-    const [r] = await pool.query('INSERT INTO users (email, last_login_at) VALUES (?, NOW())', [email]);
-    user = { id: r.insertId, email, nickname: '' };
-  } else {
-    await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = ?', [user.id]);
-  }
-
+async function createSession(userId) {
   const token = crypto.randomUUID();
+  const pool = getPool();
   await pool.query(
     'INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? DAY))',
-    [token, user.id, SESSION_TTL_DAYS]
+    [token, userId, SESSION_TTL_DAYS]
   );
-  return { token, user };
+  return token;
+}
+
+// 注册：邮箱验证码验证身份 + 设置密码 + 昵称
+export async function register(email, code, password, nickname) {
+  if (String(password).length < 6) throw new Error('密码至少 6 位');
+  const pool = getPool();
+  const [exists] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
+  if (exists.length > 0) throw new Error('该邮箱已注册，请直接登录');
+  await consumeCode(email, code);
+  const [r] = await pool.query(
+    'INSERT INTO users (email, nickname, password_hash, last_login_at) VALUES (?, ?, ?, NOW())',
+    [email, String(nickname || '').slice(0, 20), hashPassword(password)]
+  );
+  const token = await createSession(r.insertId);
+  return { token, user: { id: r.insertId, email, nickname: nickname || '' } };
+}
+
+// 登录：邮箱 + 密码
+export async function loginWithPassword(email, password) {
+  const pool = getPool();
+  const [users] = await pool.query('SELECT id, email, nickname, password_hash FROM users WHERE email = ?', [email]);
+  const user = users[0];
+  if (!user || !checkPassword(password, user.password_hash)) throw new Error('邮箱或密码不正确');
+  await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = ?', [user.id]);
+  const token = await createSession(user.id);
+  return { token, user: { id: user.id, email: user.email, nickname: user.nickname } };
 }
 
 // 从请求头解析登录态；返回 null 表示游客

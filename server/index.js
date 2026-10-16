@@ -9,7 +9,7 @@ import { generatePlan } from './llm.js';
 import { sendPlanEmail } from './email.js';
 import { dbEnabled, initDb } from './db.js';
 import {
-  sendLoginCode, verifyLoginCode, resolveUser, logout,
+  sendLoginCode, register, loginWithPassword, resolveUser, logout,
   guestTryUse, savePlan, listPlans, getPlan,
 } from './auth.js';
 
@@ -45,7 +45,7 @@ app.get('/api/health', (_req, res) => res.json({ ok: true, llm: !!process.env.LL
 
 app.get('/api/exercises', (_req, res) => res.json(EXERCISES));
 
-// ---------- 登录（邮箱验证码，免密码） ----------
+// ---------- 登录 / 注册 ----------
 app.post('/api/auth/code', async (req, res) => {
   try {
     if (!dbEnabled()) return res.status(503).json({ error: '服务器未配置数据库，登录暂不可用' });
@@ -58,13 +58,25 @@ app.post('/api/auth/code', async (req, res) => {
   }
 });
 
-app.post('/api/auth/verify', async (req, res) => {
+// 注册：验证码验证身份 + 设置密码 + 昵称
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    if (!dbEnabled()) return res.status(503).json({ error: '服务器未配置数据库，注册暂不可用' });
+    const { email = '', code = '', password = '', nickname = '' } = req.body || {};
+    const result = await register(String(email).trim(), String(code).trim(), String(password), String(nickname).trim());
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) });
+  }
+});
+
+// 登录：邮箱 + 密码
+app.post('/api/auth/login', async (req, res) => {
   try {
     if (!dbEnabled()) return res.status(503).json({ error: '服务器未配置数据库，登录暂不可用' });
-    const email = String(req.body?.email || '').trim();
-    const code = String(req.body?.code || '').trim();
-    const { token, user } = await verifyLoginCode(email, code);
-    res.json({ token, user });
+    const { email = '', password = '' } = req.body || {};
+    const result = await loginWithPassword(String(email).trim(), String(password));
+    res.json(result);
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) });
   }

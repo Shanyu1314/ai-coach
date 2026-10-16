@@ -31,10 +31,20 @@ export async function initDb() {
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     email VARCHAR(190) UNIQUE NOT NULL,
     nickname VARCHAR(50) DEFAULT '',
+    password_hash VARCHAR(200) DEFAULT NULL,
     profile JSON,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_login_at TIMESTAMP NULL
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  // 老库兼容：users 表没有 password_hash 就补上（MySQL 8 不支持 ADD COLUMN IF NOT EXISTS，先查再加）
+  const [cols] = await p.query(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'password_hash'`
+  );
+  if (cols.length === 0) {
+    await p.query(`ALTER TABLE users ADD COLUMN password_hash VARCHAR(200) DEFAULT NULL`);
+    console.log('[db] users 表已补充 password_hash 列');
+  }
   await p.query(`CREATE TABLE IF NOT EXISTS login_codes (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     email VARCHAR(190) NOT NULL,

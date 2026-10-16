@@ -31,7 +31,7 @@ const TYPE_STYLE: Record<string, { label: string; cls: string }> = {
 }
 
 export default function App() {
-  const [step, setStep] = useState<'form' | 'loading' | 'plan'>('form')
+  const [step, setStep] = useState<'welcome' | 'form' | 'loading' | 'plan'>('welcome')
   const [profile, setProfile] = useState({
     nickname: '', gender: '男', age: '', height: '', weight: '',
     goal: '薄肌塑形', equipment: ['徒手'] as string[],
@@ -48,7 +48,10 @@ export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem('ai_coach_token') || '')
   const [user, setUser] = useState<{ id: number; email: string; nickname: string } | null>(null)
   const [authOpen, setAuthOpen] = useState(false)
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
   const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authNickname, setAuthNickname] = useState('')
   const [authCode, setAuthCode] = useState('')
   const [codeSent, setCodeSent] = useState(false)
   const [countdown, setCountdown] = useState(0)
@@ -63,7 +66,10 @@ export default function App() {
     if (!token) return
     fetch('/api/me', { headers: authHeaders() })
       .then((r) => r.json())
-      .then((d) => { if (d.user) setUser(d.user); else { setToken(''); localStorage.removeItem('ai_coach_token') } })
+      .then((d) => {
+        if (d.user) { setUser(d.user); setStep('form') }
+        else { setToken(''); localStorage.removeItem('ai_coach_token') }
+      })
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -73,6 +79,13 @@ export default function App() {
     const t = setTimeout(() => setCountdown((c) => c - 1), 1000)
     return () => clearTimeout(t)
   }, [countdown])
+
+  function openAuth(mode: 'login' | 'register') {
+    setAuthMode(mode)
+    setAuthOpen(true)
+    setCodeSent(false)
+    setAuthCode('')
+  }
 
   async function sendCode() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(authEmail)) { toast.error('邮箱格式不正确'); return }
@@ -89,26 +102,46 @@ export default function App() {
     } catch (e) { toast.error(String((e as Error).message || e)) } finally { setAuthBusy(false) }
   }
 
-  async function login() {
+  function applyLogin(d: { token: string; user: { id: number; email: string; nickname: string } }) {
+    setToken(d.token)
+    localStorage.setItem('ai_coach_token', d.token)
+    setUser(d.user)
+    setAuthOpen(false)
+    setStep('form')
+    toast.success(`欢迎，${d.user.nickname || d.user.email}`)
+  }
+
+  async function doLogin() {
     setAuthBusy(true)
     try {
-      const r = await fetch('/api/auth/verify', {
+      const r = await fetch('/api/auth/login', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: authEmail, code: authCode }),
+        body: JSON.stringify({ email: authEmail, password: authPassword }),
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || '登录失败')
-      setToken(d.token)
-      localStorage.setItem('ai_coach_token', d.token)
-      setUser(d.user)
-      setAuthOpen(false)
-      toast.success(`登录成功，欢迎回来 ${d.user.nickname || d.user.email}`)
+      applyLogin(d)
+    } catch (e) { toast.error(String((e as Error).message || e)) } finally { setAuthBusy(false) }
+  }
+
+  async function doRegister() {
+    setAuthBusy(true)
+    try {
+      const r = await fetch('/api/auth/register', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, code: authCode, password: authPassword, nickname: authNickname }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || '注册失败')
+      applyLogin(d)
     } catch (e) { toast.error(String((e as Error).message || e)) } finally { setAuthBusy(false) }
   }
 
   async function doLogout() {
     await fetch('/api/auth/logout', { method: 'POST', headers: authHeaders() }).catch(() => {})
     setToken(''); setUser(null); localStorage.removeItem('ai_coach_token')
+    setPlan(null)
+    setStep('welcome')
     toast.success('已退出登录')
   }
 
@@ -166,7 +199,7 @@ export default function App() {
       })
       if (!resp.ok || !resp.body) {
         const data = await resp.json().catch(() => ({}))
-        if (data.needLogin) { setAuthOpen(true) }
+        if (data.needLogin) { openAuth('register') }
         throw new Error(data.error || '生成失败')
       }
       // 逐行解析 SSE 流：stage 事件更新进度，result 事件给出最终计划
@@ -193,7 +226,7 @@ export default function App() {
         }
       }
       if (streamError) {
-        if (streamNeedLogin) setAuthOpen(true)
+        if (streamNeedLogin) openAuth('register')
         throw new Error(streamError)
       }
       if (!final) throw new Error('生成中断，请重试')
@@ -231,33 +264,59 @@ export default function App() {
       <Toaster theme="dark" position="top-center" />
       <div className="mx-auto max-w-3xl px-4 py-10">
         <header className="mb-8 text-center">
-          {/* 右上角登录区 */}
-          <div className="mb-3 flex justify-end">
-            {user ? (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="rounded-full bg-green-500/10 border border-green-500/30 px-3 py-1 text-green-400 max-w-40 truncate">
-                  {user.nickname || user.email}
-                </span>
-                <Button variant="outline" size="sm" className="border-zinc-700" onClick={openHistory}>
-                  <History className="mr-1 h-3.5 w-3.5" /> 我的计划
+          {/* 右上角登录区（首屏 welcome 不显示） */}
+          {step !== 'welcome' && (
+            <div className="mb-3 flex justify-end">
+              {user ? (
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="rounded-full bg-green-500/10 border border-green-500/30 px-3 py-1 text-green-400 max-w-40 truncate">
+                    {user.nickname || user.email}
+                  </span>
+                  <Button variant="outline" size="sm" className="border-zinc-700" onClick={openHistory}>
+                    <History className="mr-1 h-3.5 w-3.5" /> 我的计划
+                  </Button>
+                  <Button variant="ghost" size="sm" className="text-zinc-500" onClick={doLogout}>
+                    <LogOut className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ) : (
+                <Button variant="outline" size="sm" className="border-zinc-700" onClick={() => openAuth('login')}>
+                  <LogIn className="mr-1 h-3.5 w-3.5" /> 登录
                 </Button>
-                <Button variant="ghost" size="sm" className="text-zinc-500" onClick={doLogout}>
-                  <LogOut className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            ) : (
-              <Button variant="outline" size="sm" className="border-zinc-700" onClick={() => setAuthOpen(true)}>
-                <LogIn className="mr-1 h-3.5 w-3.5" /> 邮箱登录
-              </Button>
-            )}
-          </div>
+              )}
+            </div>
+          )}
           <div className="mb-2 flex items-center justify-center gap-2">
             <Dumbbell className="h-7 w-7 text-blue-400" />
             <h1 className="text-2xl font-bold">AI 私教计划生成器</h1>
           </div>
           <p className="text-sm text-zinc-500">填 30 秒问卷，大模型为你定制训练计划，自动配上 302 个标准动作动图</p>
-          {!user && <p className="mt-1 text-xs text-zinc-600">游客可免费体验 1 次 · 登录后无限生成并保存计划</p>}
         </header>
+
+        {/* 首屏：登录 / 注册 / 游客体验 */}
+        {step === 'welcome' && (
+          <Card className="border-zinc-800 bg-[#16181c]">
+            <CardContent className="space-y-3 pt-8 pb-8">
+              <Button className="w-full bg-blue-600 hover:bg-blue-500" size="lg" onClick={() => openAuth('login')}>
+                <LogIn className="mr-2 h-4 w-4" /> 登录
+              </Button>
+              <Button className="w-full" variant="outline" size="lg" onClick={() => openAuth('register')}>
+                <Mail className="mr-2 h-4 w-4" /> 注册新账号
+              </Button>
+              <div className="flex items-center gap-3 py-1">
+                <div className="h-px flex-1 bg-zinc-800" />
+                <span className="text-xs text-zinc-600">或</span>
+                <div className="h-px flex-1 bg-zinc-800" />
+              </div>
+              <Button variant="ghost" className="w-full text-zinc-400" onClick={() => setStep('form')}>
+                游客体验（免费生成 1 次，不保存任何数据）
+              </Button>
+              <p className="pt-2 text-center text-xs text-zinc-600">
+                注册登录后：无限生成 · 计划自动保存 · 历史随时回看
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         {step === 'form' && (
           <Card className="border-zinc-800 bg-[#16181c]">
@@ -361,7 +420,7 @@ export default function App() {
             {!user && !saved && (
               <div className="flex items-center justify-between gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-300">
                 <span>游客模式：本次计划不会被保存，刷新后消失</span>
-                <Button size="sm" variant="outline" className="border-yellow-500/40 text-yellow-300 shrink-0" onClick={() => setAuthOpen(true)}>
+                <Button size="sm" variant="outline" className="border-yellow-500/40 text-yellow-300 shrink-0" onClick={() => openAuth('register')}>
                   登录保存
                 </Button>
               </div>
@@ -501,41 +560,67 @@ export default function App() {
         )}
       </div>
 
-      {/* 登录弹窗：邮箱 + 验证码，免密码 */}
+      {/* 登录 / 注册弹窗 */}
       {authOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={() => setAuthOpen(false)}>
           <Card className="w-full max-w-sm border-zinc-700 bg-[#16181c]" onClick={(e) => e.stopPropagation()}>
-            <CardHeader><CardTitle className="text-base">邮箱登录</CardTitle></CardHeader>
+            <CardHeader>
+              <div className="grid grid-cols-2 gap-1 rounded-lg bg-zinc-900 p-1">
+                {(['login', 'register'] as const).map((m) => (
+                  <button key={m} onClick={() => { setAuthMode(m); setCodeSent(false); setAuthCode('') }}
+                    className={`rounded-md py-1.5 text-sm transition ${authMode === m ? 'bg-blue-600 text-white' : 'text-zinc-400'}`}>
+                    {m === 'login' ? '登录' : '注册'}
+                  </button>
+                ))}
+              </div>
+            </CardHeader>
             <CardContent className="space-y-4">
+              {authMode === 'register' && (
+                <div>
+                  <Label>昵称</Label>
+                  <Input className="mt-1 bg-zinc-900 border-zinc-700" value={authNickname}
+                    onChange={(e) => setAuthNickname(e.target.value)} placeholder="显示在个人中心的名称" maxLength={20} />
+                </div>
+              )}
               <div>
                 <Label>邮箱</Label>
-                <Input className="mt-1 bg-zinc-900 border-zinc-700" type="email" value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)} placeholder="you@example.com" disabled={codeSent} />
+                <div className="mt-1 flex gap-2">
+                  <Input className="flex-1 bg-zinc-900 border-zinc-700" type="email" value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)} placeholder="you@example.com" />
+                  {authMode === 'register' && (
+                    <Button variant="outline" className="border-zinc-700 shrink-0" disabled={authBusy || countdown > 0} onClick={sendCode}>
+                      {countdown > 0 ? `${countdown}s` : codeSent ? '重发' : '发验证码'}
+                    </Button>
+                  )}
+                </div>
               </div>
-              {codeSent && (
+              {authMode === 'register' && (
                 <div>
-                  <Label>验证码</Label>
+                  <Label>邮箱验证码</Label>
                   <Input className="mt-1 bg-zinc-900 border-zinc-700 tracking-widest" value={authCode}
                     onChange={(e) => setAuthCode(e.target.value)} placeholder="6 位数字" maxLength={6} />
                 </div>
               )}
-              <div className="flex gap-2">
-                {!codeSent ? (
-                  <Button className="flex-1 bg-blue-600 hover:bg-blue-500" disabled={authBusy} onClick={sendCode}>
-                    {authBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />} 发送验证码
-                  </Button>
-                ) : (
-                  <>
-                    <Button className="flex-1 bg-blue-600 hover:bg-blue-500" disabled={authBusy || authCode.length !== 6} onClick={login}>
-                      {authBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogIn className="mr-2 h-4 w-4" />} 登录
-                    </Button>
-                    <Button variant="outline" className="border-zinc-700" disabled={countdown > 0} onClick={sendCode}>
-                      {countdown > 0 ? `${countdown}s` : '重发'}
-                    </Button>
-                  </>
-                )}
+              <div>
+                <Label>密码{authMode === 'register' && '（至少 6 位）'}</Label>
+                <Input className="mt-1 bg-zinc-900 border-zinc-700" type="password" value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)} placeholder="••••••••"
+                  onKeyDown={(e) => { if (e.key === 'Enter') authMode === 'login' ? doLogin() : doRegister() }} />
               </div>
-              <p className="text-xs text-zinc-600">免密码登录：验证码 10 分钟内有效，未注册的邮箱会自动创建账号</p>
+              {authMode === 'login' ? (
+                <Button className="w-full bg-blue-600 hover:bg-blue-500" disabled={authBusy || !authEmail || !authPassword} onClick={doLogin}>
+                  {authBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LogIn className="mr-2 h-4 w-4" />} 登录
+                </Button>
+              ) : (
+                <Button className="w-full bg-blue-600 hover:bg-blue-500"
+                  disabled={authBusy || !authEmail || authCode.length !== 6 || authPassword.length < 6 || !authNickname}
+                  onClick={doRegister}>
+                  {authBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />} 注册并登录
+                </Button>
+              )}
+              <p className="text-xs text-zinc-600">
+                {authMode === 'register' ? '验证码 10 分钟内有效；注册即同意本计划仅供参考、不构成医疗建议' : '还没有账号？点上方「注册」，验证码验证邮箱后即可设置密码'}
+              </p>
             </CardContent>
           </Card>
         </div>
