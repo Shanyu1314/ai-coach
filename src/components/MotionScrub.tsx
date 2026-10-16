@@ -29,43 +29,51 @@ export function MotionScrub({ slug, name }: Props) {
     let animator: ReturnType<typeof createFrameAnimator> | null = null
     let idleTimer: ReturnType<typeof setTimeout> | null = null
     let visible = true
+    let loadStarted = false // 懒加载：进入视口附近才请求图片
     let position = 0 // 闭环浮点位置 [0, LOOP_LEN)
     let dragging = false
     let lastX = 0
 
     const img = new Image()
-    img.src = url
 
-    img.decode().then(() => {
-      if (destroyed) return
-      host.style.backgroundImage = `url(${url})`
-      const renderFrame = createCssSpriteRenderer(host, 3, 1)
-      animator = createFrameAnimator({
-        frameCount: LOOP_LEN,
-        circular: true,
-        smoothTime: 0.12,
-        reducedMotion: reduced,
-        render: (f) => renderFrame(SEQ[Math.round(f) % LOOP_LEN]),
-      })
-      setStatus('ready')
-
-      // 静态降级：reduced motion 只显示 K0，不自动播放
-      if (reduced) return
-
-      // 无交互自动播放；用户拖动后暂停 2.5s 再恢复
-      const tick = () => {
+    const startLoad = () => {
+      if (loadStarted || destroyed) return
+      loadStarted = true
+      img.src = url
+      img.decode().then(() => {
         if (destroyed) return
-        if (visible && !dragging && !document.hidden) {
-          position = (position + 1) % LOOP_LEN
-          animator?.setTarget(position)
+        host.style.backgroundImage = `url(${url})`
+        const renderFrame = createCssSpriteRenderer(host, 3, 1)
+        animator = createFrameAnimator({
+          frameCount: LOOP_LEN,
+          circular: true,
+          smoothTime: 0.12,
+          reducedMotion: reduced,
+          render: (f) => renderFrame(SEQ[Math.round(f) % LOOP_LEN]),
+        })
+        setStatus('ready')
+
+        // 静态降级：reduced motion 只显示 K0，不自动播放
+        if (reduced) return
+
+        // 无交互自动播放；用户拖动后暂停 2.5s 再恢复
+        const tick = () => {
+          if (destroyed) return
+          if (visible && !dragging && !document.hidden) {
+            position = (position + 1) % LOOP_LEN
+            animator?.setTarget(position)
+          }
+          idleTimer = setTimeout(tick, AUTOPLAY_MS)
         }
         idleTimer = setTimeout(tick, AUTOPLAY_MS)
-      }
-      idleTimer = setTimeout(tick, AUTOPLAY_MS)
-    }).catch(() => { if (!destroyed) setStatus('error') })
+      }).catch(() => { if (!destroyed) setStatus('error') })
+    }
 
-    // 离屏暂停
-    const io = new IntersectionObserver(([entry]) => { visible = entry.isIntersecting })
+    // 离屏暂停 + 懒加载触发（提前 300px 开始加载，滚动到时不突兀）
+    const io = new IntersectionObserver(([entry]) => {
+      visible = entry.isIntersecting
+      if (entry.isIntersecting) startLoad()
+    }, { rootMargin: '300px' })
     io.observe(host)
 
     // 拖动 scrub：事件只更新目标，渲染交给 animator 的 rAF
