@@ -75,6 +75,11 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // 登录后档案昵称自动跟随账号昵称；退出后恢复可填
+    setProfile((p) => ({ ...p, nickname: user?.nickname || '' }))
+  }, [user])
+
+  useEffect(() => {
     if (countdown <= 0) return
     const t = setTimeout(() => setCountdown((c) => c - 1), 1000)
     return () => clearTimeout(t)
@@ -323,7 +328,16 @@ export default function App() {
             <CardHeader><CardTitle className="text-base">你的身体档案</CardTitle></CardHeader>
             <CardContent className="space-y-5">
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                <div><Label>昵称</Label><Input className="mt-1 bg-zinc-900 border-zinc-700" value={profile.nickname} onChange={(e) => setProfile({ ...profile, nickname: e.target.value })} placeholder="可选" /></div>
+                <div><Label>昵称</Label>
+                  {user ? (
+                    // 登录用户：昵称跟随注册账号，无需重复填写
+                    <div className="mt-1 flex h-9 items-center rounded-md border border-zinc-800 bg-zinc-900/50 px-3 text-sm text-zinc-400">
+                      {user.nickname || user.email}
+                    </div>
+                  ) : (
+                    <Input className="mt-1 bg-zinc-900 border-zinc-700" value={profile.nickname} onChange={(e) => setProfile({ ...profile, nickname: e.target.value })} placeholder="可选" />
+                  )}
+                </div>
                 <div><Label>性别</Label>
                   <Select value={profile.gender} onValueChange={(v) => setProfile({ ...profile, gender: v })}>
                     <SelectTrigger className="mt-1 bg-zinc-900 border-zinc-700"><SelectValue /></SelectTrigger>
