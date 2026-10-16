@@ -18,6 +18,18 @@ export function validatePlan(raw) {
   const errors = [];
   if (!raw || typeof raw !== 'object') return { plan: null, errors: ['计划不是 JSON 对象'] };
 
+  // 紧凑输出兼容：模型可输出 templateWeek（一周完整模板）+ weeksMeta（每周 focus），
+  // 服务端展开为完整 weeks，模型输出量减少约 70%，生成时间从 3 分钟压到 1 分钟内
+  if ((!Array.isArray(raw.weeks) || raw.weeks.length === 0) && raw.templateWeek && Array.isArray(raw.templateWeek.days)) {
+    const metas = Array.isArray(raw.weeksMeta) ? raw.weeksMeta : [];
+    const n = Math.max(metas.length, Number(raw.durationWeeks) || 1, 1);
+    raw.weeks = Array.from({ length: n }, (_, i) => ({
+      week: i + 1,
+      focus: String(metas[i]?.focus || '').slice(0, 100),
+      days: raw.templateWeek.days,
+    }));
+  }
+
   const plan = {
     title: String(raw.title || '我的专属训练计划').slice(0, 60),
     summary: String(raw.summary || '').slice(0, 500),

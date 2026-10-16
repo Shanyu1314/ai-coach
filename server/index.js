@@ -51,6 +51,34 @@ app.post('/api/plan', async (req, res) => {
   }
 });
 
+// SSE 流式版：实时推送生成进度，避免用户面对死等的转圈
+app.post('/api/plan/stream', async (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  const hb = setInterval(() => res.write(': hb\n\n'), 10_000); // 心跳防中间设备断连
+  try {
+    const profile = req.body || {};
+    if (!profile.goal) {
+      send('error', { error: '缺少训练目标' });
+      return;
+    }
+    send('stage', { text: '档案已收到，正在筛选适合你器械的动作库…' });
+    const result = await generatePlan(profile, (text) => send('stage', { text }));
+    send('result', result);
+  } catch (err) {
+    console.error('[plan/stream]', err);
+    send('error', { error: '计划生成失败，请稍后再试' });
+  } finally {
+    clearInterval(hb);
+    res.end();
+  }
+});
+
 app.post('/api/email', async (req, res) => {
   try {
     const { to, plan } = req.body || {};

@@ -58,10 +58,13 @@ export default function App() {
       equipment: p.equipment.includes(e) ? p.equipment.filter((x) => x !== e) : [...p.equipment, e],
     }))
 
+  const [progress, setProgress] = useState<string[]>([])
+
   async function generate() {
     setStep('loading')
+    setProgress(['正在连接教练…'])
     try {
-      const resp = await fetch('/api/plan', {
+      const resp = await fetch('/api/plan/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -74,10 +77,36 @@ export default function App() {
           durationWeeks: Number(profile.durationWeeks),
         }),
       })
-      const data = await resp.json()
-      if (!resp.ok) throw new Error(data.error || '生成失败')
-      setPlan(data.plan)
-      setSource(data.source)
+      if (!resp.ok || !resp.body) {
+        const data = await resp.json().catch(() => ({}))
+        throw new Error(data.error || '生成失败')
+      }
+      // 逐行解析 SSE 流：stage 事件更新进度，result 事件给出最终计划
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      let final: { plan: Plan; source: string } | null = null
+      let streamError = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const chunks = buf.split('\n\n')
+        buf = chunks.pop() || ''
+        for (const chunk of chunks) {
+          const event = chunk.match(/^event: (\w+)/m)?.[1]
+          const dataLine = chunk.match(/^data: (.*)$/m)?.[1]
+          if (!event || !dataLine) continue
+          const payload = JSON.parse(dataLine)
+          if (event === 'stage') setProgress((p) => [...p, payload.text])
+          else if (event === 'result') final = payload
+          else if (event === 'error') streamError = payload.error
+        }
+      }
+      if (streamError) throw new Error(streamError)
+      if (!final) throw new Error('生成中断，请重试')
+      setPlan(final.plan)
+      setSource(final.source)
       setStep('plan')
     } catch (err) {
       toast.error(String(err))
@@ -181,10 +210,20 @@ export default function App() {
         )}
 
         {step === 'loading' && (
-          <div className="flex flex-col items-center gap-4 py-24 text-zinc-400">
+          <div className="flex flex-col items-center gap-6 py-24 text-zinc-400">
             <Loader2 className="h-10 w-10 animate-spin text-blue-400" />
-            <p>教练正在翻阅 302 个动作库，为你编排计划…</p>
-            <p className="text-xs text-zinc-600">大模型生成约需 20~60 秒</p>
+            <p>教练正在为你定制计划，全程约 1 分钟</p>
+            <div className="w-full max-w-sm space-y-2">
+              {progress.map((p, i) => (
+                <div key={i} className={`flex items-center gap-2 text-sm ${i === progress.length - 1 ? 'text-zinc-200' : 'text-zinc-500'}`}>
+                  {i === progress.length - 1
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400 shrink-0" />
+                    : <span className="text-green-500 shrink-0">✓</span>}
+                  <span>{p}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-zinc-600">进度实时推送中，请不要关闭页面</p>
           </div>
         )}
 
