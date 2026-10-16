@@ -1,0 +1,18 @@
+[Unit]
+Description=AI Coach - 健身计划生成器
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ai-coach
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/ai-coach/.env
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=3
+# 安全收紧
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

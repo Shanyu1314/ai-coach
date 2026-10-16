@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "fps": 1.818,
+  "frameDuration": 0.55,
+  "initialState": "k0",
+  "states": [
+    { "id": "k0", "hold": 0 },
+    { "id": "k1", "hold": 0.55 },
+    { "id": "k2", "hold": 1.1 }
+  ],
+  "segments": [
+    { "id": "k0-k1", "from": "k0", "to": "k1", "start": 0, "hold": 0.55, "endExclusive": 0.55, "curve": { "type": "constant", "rate": 1 } },
+    { "id": "k1-k2", "from": "k1", "to": "k2", "start": 0.55, "hold": 1.1, "endExclusive": 1.1, "curve": { "type": "constant", "rate": 1 } },
+    { "id": "k2-k1", "from": "k2", "to": "k1", "start": 1.1, "hold": 1.65, "endExclusive": 1.65, "curve": { "type": "constant", "rate": 1 } }
+  ],
+  "circularSequence": [0, 1, 2, 1],
+  "cell": { "width": 680, "height": 680 },
+  "columns": 3,
+  "rows": 1
+}

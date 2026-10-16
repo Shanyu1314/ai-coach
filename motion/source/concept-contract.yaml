@@ -1,0 +1,17 @@
+# Concept Contract —— 动作卡片交互式动作检视
+subject_count: 1
+subjects:
+  - identity: workout-guide 动作示意人物（白色线稿，透明底，3 帧序列，来自既有资产，不新生成）
+style: 保持 workout-guide 原有线稿风格，不做任何重绘
+motion_intent: 用户在动作卡片上横向拖动，逐帧检视动作姿势细节；无交互时自动循环播放
+background_owner: page   # 原始帧为透明 PNG，直接复用在页面深色背景上
+driver: drag
+input_semantics: continuous
+time_control: scrub
+navigation: none
+clip_continuity: independent
+continuity:
+  - 人物线稿风格与身份不变（直接使用原帧，零生成）
+  - 帧序列循环顺序固定为 1→2→3→2
+aspect_ratio: 1:1        # 卡片方形视窗，与源帧 512×512 一致，无裁切
+destination: 计划页动作卡片，最大 CSS 宽度约 340px，桌面 + 移动端

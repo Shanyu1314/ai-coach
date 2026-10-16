@@ -1,0 +1,22 @@
+# Motion Brief —— 由 concept-contract 派生
+concept_contract: source/concept-contract.yaml
+identity_bible: null      # 使用既有资产，无需身份圣经
+parameter_space: circular # 1→2→3→2 闭环
+media_access: random      # scrub 需要随机访问任意帧
+gesture_policy:
+  unit: continuous
+  inertia: coalesce
+  while_active: retarget
+  boundary: loop          # 拖过边界循环回绕
+  programmatic_navigation: ignore
+storyboard: 单一循环：动作起始姿势 → 中间姿势 → 峰值姿势 → 回到中间
+keyframes: [K0, K1, K2]   # 既有资产 frame-1/2/3.png
+clip_chain: [[K0, K1], [K1, K2], [K2, K1]]  # 闭环序列 [0,1,2,1]
+rest_state: 无交互时自动播放，550ms 步进
+loop: closed
+anchor: center
+frame_policy: native      # 仅 3 帧，不插帧
+target_fps: 约 2fps 自动播放；scrub 时跟随手势
+quality_target: 512×512 源帧，DPR 2 下 340px CSS 尺寸足够
+pixel_dimensions: 512x512
+reduced_motion: 静态显示 K0（frame-1），不自动播放

@@ -1,0 +1,46 @@
+{
+  "display": {
+    "width": 340,
+    "height": 340,
+    "dpr": 2.0
+  },
+  "requiredCell": {
+    "width": 680,
+    "height": 680
+  },
+  "frames": 4,
+  "texture": {
+    "maxSize": 4096,
+    "columnsPerSheet": 6,
+    "rowsPerSheet": 6,
+    "framesPerSheet": 36,
+    "sheetCount": 1
+  },
+  "decodedFrameMemoryMiB": 7.1,
+  "sourceCheck": null,
+  "cellCheck": null,
+  "temporalCheck": null,
+  "driver": "drag",
+  "parameterSpace": "circular",
+  "timeControl": "scrub",
+  "access": "random",
+  "backgroundOwner": "page",
+  "delivery": {
+    "selected": "alpha-atlas",
+    "reasonCodes": [
+      "random-access-fits-atlas-budget"
+    ],
+    "atlasWithinBudget": true,
+    "thresholds": {
+      "atlasMaxSheets": 1,
+      "atlasMaxDecodedMemoryMiB": 192.0,
+      "linearVideoMinFrames": 180
+    }
+  },
+  "runtime": {
+    "renderer": "css-alpha-atlas",
+    "controller": "frame-scrub"
+  },
+  "failures": [],
+  "passes": true
+}
